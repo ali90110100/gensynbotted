@@ -3,7 +3,7 @@ from web3 import Web3
 import requests
 from datetime import datetime
 import pytz
-import json
+import os
 
 app = Flask(__name__)
 
@@ -23,33 +23,45 @@ ABI = [
 
 class GensynTracker:
     def __init__(self):
-        self.w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
         try:
-            self.contract = self.w3.eth.contract(
-                address=Web3.to_checksum_address(CONTRACT_ADDRESS), 
-                abi=ABI
-            )
+            self.w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC, request_kwargs={'timeout': 60}))
+            if self.w3.is_connected():
+                print("Connected to Ethereum network")
+                self.contract = self.w3.eth.contract(
+                    address=Web3.to_checksum_address(CONTRACT_ADDRESS), 
+                    abi=ABI
+                )
+            else:
+                print("Failed to connect to Ethereum network")
+                self.contract = None
         except Exception as e:
-            print(f"Contract initialization error: {e}")
+            print(f"Initialization error: {e}")
             self.contract = None
     
     def get_peer_ids_from_eoa(self, eoa_address):
-        """Get peer IDs for a given EOA address - REAL IMPLEMENTATION"""
+        """Get peer IDs for a given EOA address"""
         try:
             if not self.contract:
                 return []
-            result = self.contract.functions.getPeerId([eoa_address]).call()
+            
+            # Validate EOA address
+            if not Web3.is_address(eoa_address):
+                return []
+                
+            checksum_address = Web3.to_checksum_address(eoa_address)
+            result = self.contract.functions.getPeerId([checksum_address]).call()
             return result[0] if result else []
         except Exception as e:
             print(f"Error getting peer IDs: {e}")
             return []
     
     def fetch_rank_data(self, peer_ids):
-        """Fetch node statistics from Gensyn API - REAL IMPLEMENTATION"""
+        """Fetch node statistics from Gensyn API"""
+        if not peer_ids:
+            return None
+            
         url = "https://gswarm.dev/api/user/data"
         headers = {"Content-Type": "application/json"}
-        
-        # For web version, we don't have Telegram ID, so we'll try without it
         payload = {"peerIds": peer_ids}
         
         try:
@@ -57,15 +69,18 @@ class GensynTracker:
             if response.status_code == 200:
                 return response.json()
             else:
-                print(f"API returned status {response.status_code}: {response.text}")
+                print(f"API returned status {response.status_code}")
                 return None
         except Exception as e:
             print(f"API Error: {e}")
             return None
     
     def format_last_seen(self, last_seen_str):
-        """Format last seen timestamp - REAL IMPLEMENTATION"""
+        """Format last seen timestamp"""
         try:
+            if not last_seen_str:
+                return {"formatted": "Never", "ago": "Never", "is_online": False}
+                
             # Handle different timestamp formats
             if 'Z' in last_seen_str:
                 last_seen_str = last_seen_str.replace('Z', '+00:00')
@@ -89,7 +104,7 @@ class GensynTracker:
             return {
                 "formatted": ist_time.strftime("%Y-%m-%d %H:%M:%S IST"),
                 "ago": ago,
-                "is_online": mins < 10  # Consider online if seen in last 10 minutes
+                "is_online": mins < 10
             }
         except Exception as e:
             print(f"Time formatting error: {e}")
@@ -99,21 +114,21 @@ class GensynTracker:
 tracker = GensynTracker()
 
 @app.route('/')
-def index():
+def home():
     return render_template('index.html')
 
 @app.route('/track', methods=['POST'])
 def track_node():
-    eoa_address = request.form.get('eoa_address', '').strip()
-    
-    if not eoa_address:
-        return jsonify({"error": "EOA address is required"}), 400
-    
-    if not Web3.is_address(eoa_address):
-        return jsonify({"error": "Invalid EOA address format"}), 400
-    
     try:
-        # Get peer IDs - REAL CALL
+        eoa_address = request.form.get('eoa_address', '').strip()
+        
+        if not eoa_address:
+            return jsonify({"error": "EOA address is required"}), 400
+        
+        if not Web3.is_address(eoa_address):
+            return jsonify({"error": "Invalid EOA address format"}), 400
+        
+        # Get peer IDs
         peer_ids = tracker.get_peer_ids_from_eoa(eoa_address)
         
         if not peer_ids:
@@ -123,12 +138,12 @@ def track_node():
                 "nodes": []
             }), 404
         
-        # Fetch REAL node data from API
+        # Fetch node data
         node_data = tracker.fetch_rank_data(peer_ids)
         
         if not node_data:
             return jsonify({
-                "error": "Unable to fetch node data from Gensyn API. Please try again later.",
+                "error": "Unable to fetch node data from Gensyn API",
                 "eoa": eoa_address,
                 "nodes": []
             }), 503
@@ -163,36 +178,29 @@ def track_node():
         })
         
     except Exception as e:
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+        print(f"Server error: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/api/health')
+@app.route('/health')
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
-
-@app.route('/api/node/<eoa_address>')
-def api_node_status(eoa_address):
-    """API endpoint for programmatic access"""
-    try:
-        peer_ids = tracker.get_peer_ids_from_eoa(eoa_address)
-        
-        if not peer_ids:
-            return jsonify({"error": "No nodes found"}), 404
-        
-        node_data = tracker.fetch_rank_data(peer_ids)
-        
-        if not node_data:
-            return jsonify({"error": "Could not fetch node data"}), 503
-        
-        return jsonify({
-            "eoa": eoa_address,
-            "peer_ids": peer_ids,
-            "data": node_data,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "web3_connected": tracker.w3.is_connected() if hasattr(tracker, 'w3') else False
+    })
 
 # Vercel requires this
-def handler(request):
-    return app(request)
+if __name__ == '__main__':
+    app.run(debug=True)
+else:
+    # For Vercel serverless
+    def handler(request):
+        from flask import Request, Response
+        import json
+        
+        # Convert Vercel request to Flask request
+        with app.request_context(request):
+            try:
+                return app.full_dispatch_request()
+            except Exception as e:
+                return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
