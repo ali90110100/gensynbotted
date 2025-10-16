@@ -1,1 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gensyn Node Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .peer-id {
+            word-break: break-all;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-gray-800 mb-4">
+                <i class="fas fa-server text-blue-500 mr-3"></i>
+                Gensyn Node Tracker
+            </h1>
+            <p class="text-gray-600 text-lg">
+                Monitor your Gensyn testnet nodes in real-time
+            </p>
+        </div>
 
+        <!-- Search Form -->
+        <div class="max-w-2xl mx-auto bg-white rounded-lg shadow-md p-6 mb-8">
+            <form id="trackerForm" class="space-y-4">
+                <div>
+                    <label for="eoa_address" class="block text-sm font-medium text-gray-700 mb-2">
+                        Enter EOA Address
+                    </label>
+                    <div class="flex space-x-4">
+                        <input 
+                            type="text" 
+                            id="eoa_address" 
+                            name="eoa_address"
+                            placeholder="0x..." 
+                            class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            required
+                        >
+                        <button 
+                            type="submit" 
+                            id="submitBtn"
+                            class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:ring-2 focus:ring-blue-300 transition-colors disabled:opacity-50"
+                        >
+                            <i class="fas fa-search mr-2"></i>
+                            Track Node
+                        </button>
+                    </div>
+                    <p class="text-sm text-gray-500 mt-2">
+                        Enter your Externally Owned Account address to track associated nodes
+                    </p>
+                </div>
+            </form>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loading" class="hidden text-center py-8">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+            <p class="text-gray-600 mt-2">Fetching node data from blockchain...</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="error" class="hidden max-w-2xl mx-auto bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
+            <div class="flex items-center">
+                <i class="fas fa-exclamation-triangle text-red-500 mr-3"></i>
+                <p id="errorMessage" class="text-red-700"></p>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" class="hidden">
+            <!-- Stats Overview -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow-md p-6 text-center">
+                    <div class="text-2xl font-bold text-blue-600" id="totalNodes">0</div>
+                    <div class="text-gray-600">Total Network Nodes</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-6 text-center">
+                    <div class="text-2xl font-bold text-green-600" id="rankedNodes">0</div>
+                    <div class="text-gray-600">Ranked Nodes</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-6 text-center">
+                    <div class="text-2xl font-bold text-purple-600" id="yourNodes">0</div>
+                    <div class="text-gray-600">Your Active Nodes</div>
+                </div>
+            </div>
+
+            <!-- Nodes List -->
+            <div id="nodesList" class="space-y-6">
+                <!-- Nodes will be dynamically inserted here -->
+            </div>
+
+            <!-- Last Updated -->
+            <div class="text-center mt-8 text-gray-500 text-sm">
+                Last updated: <span id="lastUpdated">-</span>
+            </div>
+        </div>
+
+        <!-- Info Section -->
+        <div class="max-w-2xl mx-auto mt-12 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div class="flex items-center">
+                <i class="fas fa-info-circle text-blue-500 mr-3"></i>
+                <div>
+                    <h3 class="font-semibold text-blue-800">Real-time Data</h3>
+                    <p class="text-blue-700 text-sm mt-1">
+                        This tracker uses real data from the Gensyn blockchain and API. 
+                        Data is fetched directly from the testnet contract and Gensyn network.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('trackerForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const eoaAddress = document.getElementById('eoa_address').value.trim();
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            // Reset states
+            error.classList.add('hidden');
+            results.classList.add('hidden');
+            loading.classList.remove('hidden');
+            submitBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/track', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        'eoa_address': eoaAddress
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to fetch node data from blockchain');
+                }
+                
+                displayResults(data);
+                
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                loading.classList.add('hidden');
+                submitBtn.disabled = false;
+            }
+        });
+        
+        function displayResults(data) {
+            // Update stats
+            document.getElementById('totalNodes').textContent = data.stats.total_nodes.toLocaleString();
+            document.getElementById('rankedNodes').textContent = data.stats.ranked_nodes.toLocaleString();
+            document.getElementById('yourNodes').textContent = data.stats.your_nodes;
+            document.getElementById('lastUpdated').textContent = data.timestamp;
+            
+            // Display nodes
+            const nodesList = document.getElementById('nodesList');
+            nodesList.innerHTML = '';
+            
+            if (data.nodes.length === 0) {
+                nodesList.innerHTML = `
+                    <div class="text-center py-8 text-gray-500">
+                        <i class="fas fa-info-circle text-3xl mb-4"></i>
+                        <p>No active nodes found for this EOA address</p>
+                    </div>
+                `;
+            } else {
+                data.nodes.forEach(node => {
+                    const nodeCard = createNodeCard(node);
+                    nodesList.appendChild(nodeCard);
+                });
+            }
+            
+            document.getElementById('results').classList.remove('hidden');
+        }
+        
+        function createNodeCard(node) {
+            const card = document.createElement('div');
+            card.className = 'bg-white rounded-lg shadow-md p-6';
+            
+            const statusColor = node.status === 'online' ? 'text-green-500' : 'text-red-500';
+            const statusIcon = node.status === 'online' ? 'fa-circle-check' : 'fa-circle-exclamation';
+            const statusBg = node.status === 'online' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200';
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-4">
+                    <div class="flex-1">
+                        <h3 class="text-xl font-semibold text-gray-800 mb-2">
+                            Node ${node.node_id}
+                        </h3>
+                        <div class="${statusBg} border rounded-lg p-3">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center ${statusColor}">
+                                    <i class="fas ${statusIcon} mr-2"></i>
+                                    <span class="capitalize font-medium">${node.status}</span>
+                                </div>
+                                <span class="text-sm text-gray-500">${node.last_seen.ago}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="text-sm font-medium text-gray-700">Peer ID:</label>
+                    <p class="peer-id text-xs bg-gray-100 p-2 rounded mt-1">${node.peer_id}</p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="text-center bg-blue-50 rounded-lg p-4">
+                        <div class="text-2xl font-bold text-blue-600">#${node.rank}</div>
+                        <div class="text-gray-600 text-sm">Network Rank</div>
+                    </div>
+                    <div class="text-center bg-green-50 rounded-lg p-4">
+                        <div class="text-2xl font-bold text-green-600">${node.total_wins}</div>
+                        <div class="text-gray-600 text-sm">Total Wins</div>
+                    </div>
+                    <div class="text-center bg-purple-50 rounded-lg p-4">
+                        <div class="text-2xl font-bold text-purple-600">${node.total_rewards}</div>
+                        <div class="text-gray-600 text-sm">Rewards Earned</div>
+                    </div>
+                </div>
+                
+                ${node.last_seen.formatted ? `
+                    <div class="mt-4 pt-4 border-t border-gray-200">
+                        <p class="text-xs text-gray-500">
+                            <i class="fas fa-clock mr-1"></i>
+                            Last seen: ${node.last_seen.formatted}
+                        </p>
+                    </div>
+                ` : ''}
+            `;
+            
+            return card;
+        }
+        
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('error').classList.remove('hidden');
+        }
+
+        // Add sample addresses for quick testing
+        document.addEventListener('DOMContentLoaded', function() {
+            const addressInput = document.getElementById('eoa_address');
+            addressInput.placeholder = 'Enter your EOA address (0x...)';
+            
+            // Focus on input
+            addressInput.focus();
+        });
+    </script>
+</body>
+</html>
